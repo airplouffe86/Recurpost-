@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # Core API service providing libraries, accounts, schedules and job management.
+  api:
+    build:
+      context: ./api
+    environment:
+      # Database connection string; override in your own .env file or compose overrides.
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///data/db.sqlite3}
+      # Port to bind the API on inside the container.
+      PORT: "8000"
+    volumes:
+      - api_data:/app/data
+    ports:
+      - "8080:8000"
+    depends_on:
+      - db
+
+  # Variant service that generates perceptual‑fresh MP4s. It uploads the output to S3 if boto3
+  # is installed and AWS credentials are provided. Otherwise it writes to a local static directory.
+  variant-api:
+    build:
+      context: ./tools/variant-api
+    environment:
+      # The name of the S3 bucket to upload variants into; if empty, files are served from /static
+      S3_BUCKET: ${S3_BUCKET:-}
+      # The base URL of your CDN (e.g. https://cdn.example.com). Only used if S3 uploads succeed.
+      CDN_URL: ${CDN_URL:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - variant_static:/app/static
+    ports:
+      - "8010:8000"
+
+  # Publisher services for Instagram, TikTok and YouTube. These wrap the respective platform APIs.
+  ig-publisher:
+    build:
+      context: ./tools/ig-publisher
+    environment:
+      # No global environment required; each request must supply its own ig_user_id and access_token.
+    ports:
+      - "8011:8000"
+
+  tt-publisher:
+    build:
+      context: ./tools/tt-publisher
+    ports:
+      - "8012:8000"
+
+  yt-publisher:
+    build:
+      context: ./tools/yt-publisher
+    ports:
+      - "8013:8000"
+
+  # Scheduler service that runs periodic posting jobs. It reads from the API and calls the
+  # publisher endpoints. Customize the environment variables in your override file.
+  scheduler:
+    build:
+      context: ./scheduler
+    environment:
+      API_BASE: http://api:8000
+      VARIANT_BASE: http://variant-api:8000
+      IG_PUBLISH_BASE: http://ig-publisher:8000
+      TT_PUBLISH_BASE: http://tt-publisher:8000
+      YT_PUBLISH_BASE: http://yt-publisher:8000
+      # How many posts per day to schedule; default 3
+      POSTS_PER_DAY: ${POSTS_PER_DAY:-3}
+      JITTER_MINUTES: ${JITTER_MINUTES:-15}
+    depends_on:
+      - api
+      - variant-api
+    # The scheduler does not expose ports; it runs background tasks.
+
+  # Simple Postgres service. Replace with your own database host if needed.
+  db:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: recurpostpp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  api_data:
+  variant_static:
+  pgdata:
